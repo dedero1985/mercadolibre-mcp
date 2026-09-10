@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# MCP
+claude_desktop_config.json
+.mcp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Note: OAuth tokens are stored outside this repo, under ~/.mercadolibre_mcp/
+# (see src/mercadolibre_mcp/auth.py), so there's nothing token-related to ignore here.
