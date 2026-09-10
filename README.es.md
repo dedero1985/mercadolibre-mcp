@@ -105,7 +105,7 @@ MERCADOLIBRE_SITE_ID=MLA
 
 Los módulos Python **no** cargan `.env` automáticamente. Desde el directorio del repositorio, usá `uv run --env-file .env ...` como se muestra abajo, o proporcioná las variables mediante un entorno de proceso seguro. En los comandos de inicio de los clientes, agregá `--env-file` y la ruta absoluta a `.env` después de `run`, salvo que el cliente ya herede las variables. Nunca subas `.env` a Git, pegues credenciales en el chat ni pongas secretos en argumentos de línea de comandos.
 
-Consultá la [documentación oficial de OAuth](https://developers.mercadolibre.com.uy/es_ar/autenticacion-y-autorizacion): autorizá con el titular/administrador de la cuenta, no con un colaborador; la redirect URI debe coincidir exactamente. **Limitación actual:** este CLI no implementa PKCE ni validación de OAuth `state`. Las apps que exigen PKCE necesitan una implementación de autorización compatible antes de usar este CLI; no reduzcas la seguridad de la app para evitar ese requisito. Los refresh tokens son de un solo uso y están vinculados al App ID que los emitió: no los compartas con una integración anterior ni reutilices tokens de otra app.
+Consultá la [documentación oficial de OAuth](https://developers.mercadolibre.com.uy/es_ar/autenticacion-y-autorizacion): autorizá con el titular/administrador de la cuenta, no con un colaborador; la redirect URI debe coincidir exactamente. **Mantené PKCE obligatorio en tu app de Mercado Libre.** Este CLI siempre usa PKCE con `S256` y valida OAuth `state`; no necesitás flags ni dependencias adicionales. Los refresh tokens son de un solo uso y están vinculados al App ID que los emitió: no los compartas con una integración anterior ni reutilices tokens de otra app.
 
 ### 3. Ejecutar la Configuración OAuth — una vez por país
 
@@ -123,12 +123,16 @@ uv run --env-file .env python -m mercadolibre_mcp.auth --site-id MLU
 # ...repetí para cualquier otro país/cuenta que tengas
 ```
 
-Cada ejecución hará lo siguiente:
-1. Abrirá tu navegador para autorizar la cuenta de ese país
-2. Te pedirá que pegues la URL redirigida
+Cuando sea necesaria una nueva autorización, la configuración hará lo siguiente:
+1. Generará un verificador PKCE y un `state` aleatorios nuevos, y abrirá el navegador con el desafío `S256` para autorizar la cuenta de ese país
+2. Te pedirá que pegues la URL redirigida en una terminal con **entrada oculta**; validará el destino, el `state` y el código antes de intercambiarlo junto con el verificador
 3. Guardará un token de acceso en `~/.mercadolibre_mcp/profiles/<SITE_ID>.json` (ej. `MLA.json`, `MLU.json`)
 
 Ejecutá OAuth en tu propia terminal interactiva. Pegá la URL redirigida únicamente en esa terminal, nunca en una conversación con IA. El CLI abre el navegador; no inicia un servidor HTTP para el callback.
+
+El verificador y el state existen solo durante ese intento: no cierres el CLI antes de pegar el callback. Se rechazan `code`/`state` ausentes, duplicados o vacíos, state incorrecto, respuestas de error OAuth, fragmentos y destinos inesperados sin intercambiar el código. El callback debe conservar los parámetros estáticos registrados; usá una redirect URI HTTP(S) en ASCII, sin fragmentos ni parámetros reservados de respuesta OAuth (`code`, `state`, `error`, `error_description`, `error_uri`).
+
+Si no se puede abrir el navegador o usar entrada oculta, la configuración se detiene en lugar de imprimir la URL de autorización o mostrar el callback. Configurá un navegador funcional en tu sesión de escritorio local y ejecutá nuevamente desde una terminal privada. Si se rechaza el callback, reiniciá la configuración y usá el nuevo callback, no uno anterior. La renovación de tokens existentes y las llamadas MCP no interactivas no abren el navegador.
 
 Los tokens se guardan **localmente en tu máquina**, un archivo por país, y **nunca se envían al LLM**. El servidor MCP los usa del lado del servidor para autenticar las llamadas a la API, renovando cada uno automáticamente cuando expira.
 
@@ -339,6 +343,8 @@ Todas las herramientas aceptan un parámetro opcional `site_id` que selecciona q
 
 ## Seguridad
 
+- **PKCE S256 y OAuth state**: Cada autorización interactiva usa un verificador de 256 bits y un state nuevos. Se verifican el destino y el state del callback antes de enviar el verificador al endpoint de tokens de Mercado Libre. Mantené PKCE habilitado en la app.
+- **Entrada de autorización privada**: El callback se pega con entrada oculta; el CLI no imprime la URL de autorización, el callback, el verificador ni el state. Los mensajes de rechazo OAuth no reproducen texto de error controlado por el proveedor.
 - **Las credenciales nunca llegan al LLM**: Las claves se cargan desde variables de entorno o archivos `.env` y se usan solo en el proceso del servidor MCP
 - **Tokens OAuth almacenados localmente, un archivo por país**: El token de acceso/actualización de cada sitio vive en su propio archivo bajo `~/.mercadolibre_mcp/profiles/<SITE_ID>.json` con permisos `chmod 600` y escrituras atómicas (un corte de luz a mitad de escritura nunca corrompe un perfil)
 - **Sin bloqueos interactivos**: Si se llama a una herramienta para un país que todavía no fue autorizado, el servidor devuelve un error claro indicando qué comando `auth --site-id` ejecutar — nunca se queda esperando la autorización del navegador durante una llamada en vivo
@@ -373,6 +379,28 @@ Datos en tiempo de ejecución (no forman parte del repo, se crean en el primer u
     ├── MLU.json                 # Token de Uruguay (chmod 600)
     └── ...                      # un archivo por país autorizado
 ```
+
+## Pruebas
+
+Ejecutá las pruebas de seguridad OAuth y regresión sin conexión desde el directorio del repositorio:
+
+```bash
+uv run python -m unittest discover -s tests -v
+```
+
+Resultado esperado: el comando termina correctamente y el resumen de unittest finaliza con `OK`. Cualquier fallo debe investigarse antes de usar o publicar el cambio.
+
+Las pruebas cubren el vector S256 de RFC 7636, aleatoriedad nueva, dominios de autorización de Argentina y Uruguay, intercambio de código simulado, rechazo de callback/state, entrada oculta, errores sin datos sensibles, supresión de salida del lanzador del navegador y comportamiento con tokens vigentes, renovación y modo no interactivo. No acceden a credenciales, perfiles, navegadores ni a la API reales; la regresión del lanzador usa un subproceso de navegador simulado.
+
+Para verificar el MCP instalado por separado:
+
+1. Cerrá y reiniciá OpenCode después de configurar el servidor.
+2. Ejecutá `opencode mcp list`; `mercadolibre` debe aparecer conectado. Esto verifica el inicio, no la autorización del vendedor.
+3. Pedile a OpenCode que llame a `list_authenticated_sites` mediante MercadoLibre MCP. Si usás un cliente MCP directo, los argumentos son `{"input": {}}`. Una lista vacía es normal antes de OAuth.
+4. Completá la configuración OAuth local indicada arriba para `MLU` y `MLA`, manteniendo PKCE obligatorio, y repetí la consulta de estado. Se requieren consentimiento en el navegador y la redirect URI exacta registrada; nunca pegues callbacks en el chat.
+5. Opcionalmente, solicitá una operación de cuenta de solo lectura por país, como listar tus publicaciones. Esto verifica el acceso a la API; no crees, edites ni cierres publicaciones solo para probar la instalación.
+
+Que las pruebas sin conexión pasen o que el servidor aparezca conectado no demuestra que la autorización real de las cuentas esté completa.
 
 ## Licencia
 

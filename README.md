@@ -106,7 +106,7 @@ MERCADOLIBRE_SITE_ID=MLA
 
 The Python modules do **not** automatically load `.env`. From the repository directory, use `uv run --env-file .env ...` as shown below, or supply the variables through a secure process environment. For client launch commands, add `--env-file` and the absolute path to `.env` after `run` unless the client already inherits the variables. Never commit `.env`, paste credentials into chat, or put secrets in command-line arguments.
 
-See the [official OAuth documentation](https://developers.mercadolibre.com.uy/es_ar/autenticacion-y-autorizacion): authorize with the account owner/administrator, not a collaborator; the redirect URI must match exactly. **Current limitation:** this CLI does not implement PKCE or OAuth `state` validation. Apps requiring PKCE need a compatible authorization implementation before this CLI can be used; do not weaken app security to bypass that requirement. Refresh tokens are single-use and tied to the issuing App ID, so do not share them with an old integration or reuse tokens from a different app.
+See the [official OAuth documentation](https://developers.mercadolibre.com.uy/es_ar/autenticacion-y-autorizacion): authorize with the account owner/administrator, not a collaborator; the redirect URI must match exactly. **Keep PKCE required in your MercadoLibre app.** This CLI always uses PKCE with `S256` and validates OAuth `state`; no additional flag or dependency is needed. Refresh tokens are single-use and tied to the issuing App ID, so do not share them with an old integration or reuse tokens from a different app.
 
 ### 3. Run OAuth Setup — once per country
 
@@ -124,12 +124,16 @@ uv run --env-file .env python -m mercadolibre_mcp.auth --site-id MLU
 # ...repeat for any other country/account you have
 ```
 
-Each run will:
-1. Open your browser to authorize that country's account
-2. Ask you to paste the redirected URL
+When a new authorization is needed, setup will:
+1. Generate a fresh random PKCE verifier and `state`, then open your browser with the `S256` challenge to authorize that country's account
+2. Ask you to paste the redirected URL into a **hidden-input** terminal prompt; validate its target, `state`, and authorization code before exchanging the code with the verifier
 3. Save an access token to `~/.mercadolibre_mcp/profiles/<SITE_ID>.json` (e.g. `MLA.json`, `MLU.json`)
 
 Run OAuth in your own interactive terminal. Paste the redirected URL only into that terminal, never into an AI conversation. The CLI opens a browser; it does not start a callback HTTP server.
+
+The verifier and state exist only for that setup attempt: do not close the CLI before pasting the callback. Missing, duplicate, or blank `code`/`state`, mismatched state, OAuth error replies, fragments, and unexpected redirect targets are rejected without exchanging the code. The callback must preserve any registered static query parameters; use an ASCII HTTP(S) redirect URI without fragments or reserved OAuth response parameters (`code`, `state`, `error`, `error_description`, `error_uri`).
+
+If the browser cannot launch or hidden input is unavailable, setup stops rather than printing the authorization URL or echoing the callback. Configure a working browser in your local desktop session and rerun from a private terminal. After any rejected callback, rerun setup and use the new callback, not one from an earlier attempt. Existing token refresh and noninteractive MCP calls do not open a browser.
 
 Tokens are saved **locally on your machine**, one file per country, and are **never sent to the LLM**. The MCP server uses them server-side to authenticate API calls, refreshing each one automatically as it expires.
 
@@ -358,6 +362,8 @@ All tools accept an optional `site_id` parameter selecting which authenticated c
 
 ## Security
 
+- **PKCE S256 and OAuth state**: Every interactive authorization uses a fresh 256-bit verifier and state. The callback's target and state are checked before the verifier is sent to MercadoLibre's token endpoint. Keep PKCE enabled in the app settings.
+- **Private authorization input**: Callback paste is hidden; the CLI does not print the authorization URL, callback, verifier, or state. OAuth rejection messages do not echo provider-controlled error text.
 - **Credentials never reach the LLM**: API keys and secrets are loaded from environment variables or `.env` files and used only in the MCP server process
 - **OAuth tokens cached locally, one file per country**: Each site's access/refresh token lives in its own file under `~/.mercadolibre_mcp/profiles/<SITE_ID>.json` with `chmod 600` permissions and atomic writes (a crash mid-write never corrupts a profile)
 - **No interactive hang**: If a tool is called for a country that hasn't been authorized yet, the server returns a clear error telling you which `auth --site-id` command to run — it never blocks waiting for browser input during a live tool call
@@ -392,6 +398,28 @@ Runtime data (not part of the repo, created on first use):
     ├── MLU.json                 # Uruguay token (chmod 600)
     └── ...                      # one file per authorized country
 ```
+
+## Testing
+
+Run the offline OAuth security and regression tests from the repository directory:
+
+```bash
+uv run python -m unittest discover -s tests -v
+```
+
+Expected result: the command exits successfully and the unittest summary ends with `OK`. Any failure must be investigated before using or publishing the change.
+
+Tests cover the RFC 7636 S256 vector, fresh randomness, both Argentina and Uruguay authorization domains, a mocked code exchange, callback/state rejection, hidden input, redacted errors, browser-launcher output suppression, and cached/refresh/noninteractive behavior. They do not access real credentials, profiles, browsers, or the MercadoLibre API; the launcher regression uses a fake browser subprocess.
+
+To check the installed MCP separately:
+
+1. Quit and restart OpenCode after configuring the server.
+2. Run `opencode mcp list`; expect `mercadolibre` to be connected. This checks startup, not seller authorization.
+3. Ask OpenCode to call `list_authenticated_sites` through MercadoLibre MCP. If using a raw MCP client, its arguments are `{"input": {}}`. An empty profile list is normal before OAuth.
+4. Complete the local OAuth setup above for `MLU` and `MLA`, keeping PKCE required, then repeat the status check. Browser consent and the exact registered redirect URI are required; never paste callbacks into chat.
+5. Optionally request a read-only account operation for each country, such as listing your items. This verifies API access; do not create, edit, or close listings just to test installation.
+
+Passing offline tests or seeing a connected server does not prove that live account authorization is complete.
 
 ## License
 

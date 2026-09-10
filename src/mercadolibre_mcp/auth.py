@@ -23,14 +23,21 @@ so the LLM never has access to them.
 
 from __future__ import annotations
 
+import base64
+import getpass
+import hashlib
 import json
 import logging
 import os
-import webbrowser
+import re
+import secrets
+import subprocess
+import sys
+import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import SplitResult, parse_qs, urlencode, urlsplit
 
 import httpx
 
@@ -251,14 +258,127 @@ def list_cached_sites() -> list[dict[str, Any]]:
 # ── OAuth helpers ─────────────────────────────────────────────
 
 
-def _build_authorization_url(client_id: str, redirect_uri: str, site_id: str) -> str:
-    """Build MercadoLibre authorization URL for the given site."""
+def _generate_pkce_verifier() -> str:
+    """Return an RFC 7636 unreserved verifier with 256 bits of entropy."""
+    return secrets.token_urlsafe(32)
+
+
+def _pkce_challenge(code_verifier: str) -> str:
+    """Derive the unpadded base64url S256 challenge from an RFC 7636 verifier."""
+    if re.fullmatch(r"[A-Za-z0-9._~-]{43,128}", code_verifier) is None:
+        raise ValueError("Invalid PKCE verifier.")
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def _parse_oauth_url(url: str) -> tuple[SplitResult, dict[str, list[str]]]:
+    """Parse strictly, without urllib's silent whitespace/control normalization."""
+    try:
+        if (
+            not url
+            or any(char.isspace() or ord(char) < 32 or ord(char) >= 127 for char in url)
+            or "\\" in url
+            or "#" in url
+            or re.search(r"%(?![0-9A-Fa-f]{2})", url)
+        ):
+            raise ValueError
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or "%" in parsed.netloc
+            or parsed.netloc.endswith(":")
+        ):
+            raise ValueError
+        # Accessing port also validates malformed or out-of-range port numbers.
+        _ = parsed.port
+        query = parse_qs(
+            parsed.query, keep_blank_values=True, strict_parsing=True,
+            errors="strict", max_num_fields=100,
+        )
+        return parsed, query
+    except (ValueError, UnicodeError):
+        raise RuntimeError("Invalid OAuth URL. Use the complete registered callback URL.") from None
+
+
+def _validate_redirect_uri(redirect_uri: str) -> tuple[SplitResult, dict[str, list[str]]]:
+    """Require an HTTP(S) URI without fragments or reserved OAuth query keys."""
+    parsed, query = _parse_oauth_url(redirect_uri)
+    if {"code", "state", "error", "error_description", "error_uri"}.intersection(query):
+        raise RuntimeError("Registered redirect URI must not contain OAuth response parameters.")
+    return parsed, query
+
+
+def _validate_callback(redirected_url: str, redirect_uri: str, expected_state: str) -> str:
+    """Return one code only after target, static query, OAuth error and state checks."""
+    registered, static_query = _validate_redirect_uri(redirect_uri)
+    callback, query = _parse_oauth_url(redirected_url)
+    if (callback.scheme, callback.netloc, callback.path) != (
+        registered.scheme, registered.netloc, registered.path
+    ):
+        raise RuntimeError("OAuth callback target does not match the registered redirect URI.")
+    if any(sorted(query.get(key, [])) != sorted(values) for key, values in static_query.items()):
+        raise RuntimeError("OAuth callback does not preserve the registered query parameters.")
+    if {"error", "error_description", "error_uri"}.intersection(query):
+        raise RuntimeError("OAuth authorization was not successful. Restart setup and authorize again.")
+    for key in ("code", "state"):
+        values = query.get(key, [])
+        if len(values) != 1 or not values[0].strip():
+            raise RuntimeError("OAuth callback requires exactly one nonblank code and state.")
+    if not secrets.compare_digest(query["state"][0].encode("utf-8"), expected_state.encode("utf-8")):
+        raise RuntimeError("OAuth state validation failed. Restart setup and use the new callback.")
+    return query["code"][0]
+
+
+def _open_authorization_browser(auth_url: str) -> bool:
+    """Isolate browser launchers so subprocess diagnostics cannot expose the URL."""
+    script = (
+        "import sys, webbrowser; "
+        "sys.exit(0 if webbrowser.open(sys.stdin.read()) else 1)"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            input=auth_url,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+            check=False,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _read_callback_url() -> str:
+    """Fail closed if hidden terminal input is unavailable; never fall back to echo."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            return getpass.getpass("  Pasted URL (hidden) > ")
+    except (getpass.GetPassWarning, EOFError, OSError):
+        raise RuntimeError(
+            "Hidden callback input unavailable. Retry setup in a private terminal."
+        ) from None
+
+
+def _build_authorization_url(
+    client_id: str, redirect_uri: str, site_id: str, code_challenge: str, state: str,
+) -> str:
+    """Build the site's authorization URL with mandatory PKCE S256 and OAuth state."""
     auth_domain = AUTH_DOMAINS[site_id]
     params = urlencode(
         {
             "response_type": "code",
             "client_id": client_id,
             "redirect_uri": redirect_uri,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+            "state": state,
         }
     )
     return f"https://{auth_domain}/authorization?{params}"
@@ -269,8 +389,9 @@ def _exchange_code_for_token(
     client_secret: str,
     code: str,
     redirect_uri: str,
+    code_verifier: str,
 ) -> dict[str, Any]:
-    """Exchange an authorization code for access/refresh tokens."""
+    """Exchange a validated code using its verifier and the exact registered URI."""
     resp = httpx.post(
         "https://api.mercadolibre.com/oauth/token",
         data={
@@ -279,6 +400,7 @@ def _exchange_code_for_token(
             "client_secret": client_secret,
             "code": code,
             "redirect_uri": redirect_uri,
+            "code_verifier": code_verifier,
         },
         headers={"accept": "application/json", "content-type": "application/x-www-form-urlencoded"},
     )
@@ -325,6 +447,11 @@ def ensure_token(
         - interactive=False → raise RuntimeError with instructions
           (used by the running MCP server; NEVER blocks on input() during a
           live tool call, since there's no TTY attached).
+
+    Interactive setup always uses PKCE S256 and fresh state. The complete callback
+    must match the registered HTTP(S) redirect target and static query parameters.
+    Hidden terminal input and a working browser are required; no URL is printed
+    as a fallback. Keep PKCE enabled in the registered MercadoLibre application.
     """
     validate_site_id(site_id)
     store = TokenStore(site_id)
@@ -371,33 +498,40 @@ def ensure_token(
     _redirect_uri = redirect_uri or os.environ.get(
         "MERCADOLIBRE_REDIRECT_URI", "http://localhost:8080/callback"
     )
+    _validate_redirect_uri(_redirect_uri)
+    code_verifier = _generate_pkce_verifier()
+    state = secrets.token_urlsafe(32)
 
     print(f"\n{'=' * 60}")
     print(f"  MercadoLibre MCP — OAuth Setup ({SITE_NAMES.get(site_id, site_id)})")
     print(f"{'=' * 60}")
     print("\n1. Opening browser to authorize with Mercado Libre...")
     print(f"   Site: {site_id} - {SITE_NAMES.get(site_id, site_id)}")
-    print(f"   Redirect URI: {_redirect_uri}")
     print("\n2. Log in (if needed) and click 'Allow'.")
     print("\n3. After authorizing, you'll be redirected to a URL.")
     print("   Copy the ENTIRE redirected URL and paste it here.\n")
 
-    auth_url = _build_authorization_url(_client_id, _redirect_uri, site_id)
-    webbrowser.open(auth_url)
-
-    redirected_url = input("  Pasted URL > ").strip()
-
-    parsed = urlparse(redirected_url)
-    query_params = parse_qs(parsed.query)
-    code_list = query_params.get("code")
-    if not code_list:
+    auth_url = _build_authorization_url(
+        _client_id, _redirect_uri, site_id, _pkce_challenge(code_verifier), state
+    )
+    try:
+        opened = _open_authorization_browser(auth_url)
+    except Exception:
+        # Browser launchers may include the secret-bearing URL in their errors.
+        opened = False
+    if not opened:
         raise RuntimeError(
-            "No authorization code found in the redirected URL. "
-            "Make sure you copied the full URL from the browser after authorizing."
+            "Could not open the authorization browser. Configure a local default browser "
+            "and rerun setup in a private terminal; the authorization URL is not displayed."
         )
 
-    code = code_list[0]
-    token_data = _exchange_code_for_token(_client_id, _client_secret, code, _redirect_uri)
+    code = _validate_callback(_read_callback_url(), _redirect_uri, state)
+    try:
+        token_data = _exchange_code_for_token(
+            _client_id, _client_secret, code, _redirect_uri, code_verifier
+        )
+    except (httpx.HTTPError, ValueError):
+        raise RuntimeError("OAuth token exchange failed. Restart setup and authorize again.") from None
     store.update(token_data)
 
     print("\n✓ Authentication successful!")
