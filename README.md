@@ -131,7 +131,7 @@ When a new authorization is needed, setup will:
 
 Run OAuth in your own interactive terminal. Paste the redirected URL only into that terminal, never into an AI conversation. The CLI opens a browser; it does not start a callback HTTP server.
 
-The verifier and state exist only for that setup attempt: do not close the CLI before pasting the callback. Missing, duplicate, or blank `code`/`state`, mismatched state, OAuth error replies, fragments, and unexpected redirect targets are rejected without exchanging the code. The callback must preserve any registered static query parameters; use an ASCII HTTP(S) redirect URI without fragments or reserved OAuth response parameters (`code`, `state`, `error`, `error_description`, `error_uri`).
+The verifier and state exist only for that setup attempt: do not close the CLI before pasting the callback. Missing, duplicate, or blank `code`/`state`, mismatched state, OAuth error replies, fragments, and unexpected redirect targets are rejected without exchanging the code. The callback must preserve any registered static query parameters; use an ASCII HTTP(S) redirect URI without fragments or reserved OAuth response parameters (`code`, `state`, `error`, `error_description`, `error_uri`). A registered URI with an empty path and its browser-normalized `/` form are treated as the same target; the exact registered string is still sent to the token endpoint.
 
 If the browser cannot launch or hidden input is unavailable, setup stops rather than printing the authorization URL or echoing the callback. Configure a working browser in your local desktop session and rerun from a private terminal. After any rejected callback, rerun setup and use the new callback, not one from an earlier attempt. Existing token refresh and noninteractive MCP calls do not open a browser.
 
@@ -409,7 +409,7 @@ uv run python -m unittest discover -s tests -v
 
 Expected result: the command exits successfully and the unittest summary ends with `OK`. Any failure must be investigated before using or publishing the change.
 
-Tests cover the RFC 7636 S256 vector, fresh randomness, both Argentina and Uruguay authorization domains, a mocked code exchange, callback/state rejection, hidden input, redacted errors, browser-launcher output suppression, and cached/refresh/noninteractive behavior. They do not access real credentials, profiles, browsers, or the MercadoLibre API; the launcher regression uses a fake browser subprocess.
+Tests cover the RFC 7636 S256 vector, fresh randomness, both Argentina and Uruguay authorization domains, a mocked code exchange, callback/state rejection (including trailing-slash normalization and value-free mismatch diagnostics), hidden input, redacted errors, browser-launcher output suppression, and cached/refresh/noninteractive behavior. They do not access real credentials, profiles, browsers, or the MercadoLibre API; the launcher regression uses a fake browser subprocess.
 
 To check the installed MCP separately:
 

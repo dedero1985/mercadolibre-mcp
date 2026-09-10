@@ -231,6 +231,34 @@ class OAuthFlowTests(unittest.TestCase):
         self.post.assert_called_once()
         self.assertEqual(self.post.call_args.kwargs["data"]["redirect_uri"], self.redirect_uri)
 
+    def test_registered_uri_without_path_accepts_browser_normalized_slash(self) -> None:
+        # Registered URI has an empty path; browsers send it back as "/".
+        self.redirect_uri = "https://example.test"
+
+        def callback(*_: object) -> str:
+            state = self.authorization_params()["state"][0]
+            return "https://example.test/?" + urlencode({"code": "fake-code", "state": state})
+
+        self.paste.side_effect = callback
+        self.authorize()
+        self.post.assert_called_once()
+        # The exact registered string (no trailing slash) is still exchanged.
+        self.assertEqual(self.post.call_args.kwargs["data"]["redirect_uri"], "https://example.test")
+
+    def test_callback_mismatch_reports_only_component_names(self) -> None:
+        self.redirect_uri = "https://example.test/callback"
+        cases = (
+            ("https://other.test/callback?code=a&state=b", "host"),
+            ("https://example.test/other?code=a&state=b", "path"),
+            ("http://example.test/callback?code=a&state=b", "scheme"),
+        )
+        for callback, component in cases:
+            with self.subTest(component=component):
+                message = self.assert_rejected(callback)
+                self.assertIn(component, message)
+                self.assertNotIn("example.test", message)
+                self.assertNotIn("other.test", message)
+
     def test_malformed_urls_and_fragments_never_exchange(self) -> None:
         for callback in (
             "", "/callback?code=a&state=b", "not a url", "https://[bad/callback",

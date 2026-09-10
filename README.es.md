@@ -130,7 +130,7 @@ Cuando sea necesaria una nueva autorización, la configuración hará lo siguien
 
 Ejecutá OAuth en tu propia terminal interactiva. Pegá la URL redirigida únicamente en esa terminal, nunca en una conversación con IA. El CLI abre el navegador; no inicia un servidor HTTP para el callback.
 
-El verificador y el state existen solo durante ese intento: no cierres el CLI antes de pegar el callback. Se rechazan `code`/`state` ausentes, duplicados o vacíos, state incorrecto, respuestas de error OAuth, fragmentos y destinos inesperados sin intercambiar el código. El callback debe conservar los parámetros estáticos registrados; usá una redirect URI HTTP(S) en ASCII, sin fragmentos ni parámetros reservados de respuesta OAuth (`code`, `state`, `error`, `error_description`, `error_uri`).
+El verificador y el state existen solo durante ese intento: no cierres el CLI antes de pegar el callback. Se rechazan `code`/`state` ausentes, duplicados o vacíos, state incorrecto, respuestas de error OAuth, fragmentos y destinos inesperados sin intercambiar el código. El callback debe conservar los parámetros estáticos registrados; usá una redirect URI HTTP(S) en ASCII, sin fragmentos ni parámetros reservados de respuesta OAuth (`code`, `state`, `error`, `error_description`, `error_uri`). Una redirect URI registrada con path vacío y su forma normalizada por el navegador con `/` se consideran el mismo destino; la cadena exacta registrada se sigue enviando al endpoint de tokens.
 
 Si no se puede abrir el navegador o usar entrada oculta, la configuración se detiene en lugar de imprimir la URL de autorización o mostrar el callback. Configurá un navegador funcional en tu sesión de escritorio local y ejecutá nuevamente desde una terminal privada. Si se rechaza el callback, reiniciá la configuración y usá el nuevo callback, no uno anterior. La renovación de tokens existentes y las llamadas MCP no interactivas no abren el navegador.
 
@@ -390,7 +390,7 @@ uv run python -m unittest discover -s tests -v
 
 Resultado esperado: el comando termina correctamente y el resumen de unittest finaliza con `OK`. Cualquier fallo debe investigarse antes de usar o publicar el cambio.
 
-Las pruebas cubren el vector S256 de RFC 7636, aleatoriedad nueva, dominios de autorización de Argentina y Uruguay, intercambio de código simulado, rechazo de callback/state, entrada oculta, errores sin datos sensibles, supresión de salida del lanzador del navegador y comportamiento con tokens vigentes, renovación y modo no interactivo. No acceden a credenciales, perfiles, navegadores ni a la API reales; la regresión del lanzador usa un subproceso de navegador simulado.
+Las pruebas cubren el vector S256 de RFC 7636, aleatoriedad nueva, dominios de autorización de Argentina y Uruguay, intercambio de código simulado, rechazo de callback/state (incluida la normalización de barra final y diagnósticos sin valores), entrada oculta, errores sin datos sensibles, supresión de salida del lanzador del navegador y comportamiento con tokens vigentes, renovación y modo no interactivo. No acceden a credenciales, perfiles, navegadores ni a la API reales; la regresión del lanzador usa un subproceso de navegador simulado.
 
 Para verificar el MCP instalado por separado:
 

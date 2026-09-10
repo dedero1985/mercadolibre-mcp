@@ -295,6 +295,10 @@ def _parse_oauth_url(url: str) -> tuple[SplitResult, dict[str, list[str]]]:
             raise ValueError
         # Accessing port also validates malformed or out-of-range port numbers.
         _ = parsed.port
+        # HTTP(S) treats an empty path and "/" as the same resource; browsers
+        # normalize a registered URI that way once they append the response.
+        if not parsed.path:
+            parsed = parsed._replace(path="/")
         query = parse_qs(
             parsed.query, keep_blank_values=True, strict_parsing=True,
             errors="strict", max_num_fields=100,
@@ -316,10 +320,22 @@ def _validate_callback(redirected_url: str, redirect_uri: str, expected_state: s
     """Return one code only after target, static query, OAuth error and state checks."""
     registered, static_query = _validate_redirect_uri(redirect_uri)
     callback, query = _parse_oauth_url(redirected_url)
-    if (callback.scheme, callback.netloc, callback.path) != (
-        registered.scheme, registered.netloc, registered.path
-    ):
-        raise RuntimeError("OAuth callback target does not match the registered redirect URI.")
+    callback_target = (callback.scheme, callback.netloc, callback.path)
+    registered_target = (registered.scheme, registered.netloc, registered.path)
+    if callback_target != registered_target:
+        # Report only which component differs; never echo the callback URL.
+        mismatched = [
+            name
+            for name, actual, expected in zip(
+                ("scheme", "host", "path"), callback_target, registered_target
+            )
+            if actual != expected
+        ]
+        raise RuntimeError(
+            "OAuth callback target does not match the registered redirect URI "
+            f"(mismatched: {', '.join(mismatched)}). Rerun setup and enter the exact "
+            "redirect URI registered in your MercadoLibre app."
+        )
     if any(sorted(query.get(key, [])) != sorted(values) for key, values in static_query.items()):
         raise RuntimeError("OAuth callback does not preserve the registered query parameters.")
     if {"error", "error_description", "error_uri"}.intersection(query):
