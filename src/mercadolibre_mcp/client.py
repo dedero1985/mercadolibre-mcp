@@ -18,7 +18,7 @@ from typing import Any
 
 import httpx
 
-from mercadolibre_mcp.auth import TokenStore, ensure_token, validate_site_id
+from mercadolibre_mcp.auth import TokenStore, ensure_token, normalize_account, validate_site_id
 
 logger = logging.getLogger(__name__)
 
@@ -51,18 +51,19 @@ class MercadoLibreClient:
         self._store = token_store
         self._timeout = timeout
         self.site_id = token_store.site_id
+        self.account = token_store.account
 
     # ── factories ──────────────────────────────────────────────────────────
 
     @classmethod
-    def create(cls, site_id: str) -> MercadoLibreClient:
-        """Factory: ensure a valid token for `site_id` and return a ready client.
+    def create(cls, site_id: str, account: str | None = None) -> MercadoLibreClient:
+        """Factory: ensure a valid token for `site_id` (+ optional account alias).
 
-        Non-interactive: if no token is cached for this site, raises RuntimeError
-        with instructions instead of blocking on a browser/input() flow (there's
-        no TTY available while serving a live MCP tool call).
+        Non-interactive: if no token is cached for this site/account, raises
+        RuntimeError with instructions instead of blocking on a browser/input()
+        flow (there's no TTY available while serving a live MCP tool call).
         """
-        store = ensure_token(site_id=site_id, interactive=False)
+        store = ensure_token(site_id=site_id, interactive=False, account=account)
         return cls(token_store=store)
 
     # ── request helpers ────────────────────────────────────────────────────
@@ -70,9 +71,13 @@ class MercadoLibreClient:
     def _headers(self) -> dict[str, str]:
         token = self._store.get_access_token()
         if not token:
+            account_flag = f" --account {self.account}" if self.account else ""
+            label = f"site '{self.site_id}'" + (
+                f", account '{self.account}'" if self.account else ""
+            )
             raise RuntimeError(
-                f"No access token available for site '{self.site_id}'. "
-                f"Run: uv run python -m mercadolibre_mcp.auth --site-id {self.site_id}"
+                f"No access token available for {label}. "
+                f"Run: uv run python -m mercadolibre_mcp.auth --site-id {self.site_id}{account_flag}"
             )
         return {
             "Authorization": f"Bearer {token}",
@@ -170,6 +175,13 @@ class MercadoLibreClient:
             return site_id
         return os.environ.get("MERCADOLIBRE_SITE_ID", "MLA")
 
+    @staticmethod
+    def resolve_account(account: str | None) -> str | None:
+        """Return the effective account alias from tool arg, env, or None (default)."""
+        if account:
+            return normalize_account(account)
+        return normalize_account(os.environ.get("MERCADOLIBRE_ACCOUNT"))
+
     # ── token validation ───────────────────────────────────────────────────
 
     def ensure_fresh_token(self) -> None:
@@ -181,6 +193,7 @@ class MercadoLibreClient:
                 client_id=os.environ.get("MERCADOLIBRE_CLIENT_ID"),
                 client_secret=os.environ.get("MERCADOLIBRE_CLIENT_SECRET"),
                 interactive=False,
+                account=self.account,
             )
 
     def get_user_id(self) -> int | None:

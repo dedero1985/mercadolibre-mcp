@@ -103,6 +103,39 @@ def validate_site_id(site_id: str) -> None:
         )
 
 
+ACCOUNT_ALIAS_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def normalize_account(account: str | None) -> str | None:
+    """Return a validated account alias, or None for the site's default profile.
+
+    Aliases are restricted to a safe charset so they can be used in profile
+    filenames without path traversal or separator injection.
+    """
+    if account is None:
+        return None
+    value = str(account).strip()
+    if not value:
+        return None
+    if not ACCOUNT_ALIAS_RE.fullmatch(value):
+        raise ValueError(
+            "Invalid account alias. Use 1-32 characters from A-Z, a-z, 0-9, '_' or '-'."
+        )
+    return value
+
+
+def profile_key(site_id: str, account: str | None = None) -> str:
+    """Profile identifier: '<SITE>' for the default account, '<SITE>__<alias>' otherwise."""
+    alias = normalize_account(account)
+    return f"{site_id}__{alias}" if alias else site_id
+
+
+def parse_profile_key(key: str) -> tuple[str, str | None]:
+    """Split a profile filename stem into (site_id, account)."""
+    site_id, separator, account = key.partition("__")
+    return site_id, (account if separator and account else None)
+
+
 def _migrate_legacy_token_file() -> None:
     """One-time migration from the old single-profile tokens.json to per-site profile files.
 
@@ -139,10 +172,11 @@ class TokenStore:
     accounts (and therefore tokens) are typically per-country.
     """
 
-    def __init__(self, site_id: str) -> None:
+    def __init__(self, site_id: str, account: str | None = None) -> None:
         validate_site_id(site_id)
         self.site_id = site_id
-        self._path = PROFILES_DIR / f"{site_id}.json"
+        self.account = normalize_account(account)
+        self._path = PROFILES_DIR / f"{profile_key(site_id, self.account)}.json"
         self._data: dict[str, Any] = {}
         _migrate_legacy_token_file()
         self._load()
@@ -199,6 +233,7 @@ class TokenStore:
         expires_in = token_data.get("expires_in", 21_600)  # default 6 h
         self._data = {
             "site_id": self.site_id,
+            "account": self.account,
             "access_token": token_data["access_token"],
             "token_type": token_data.get("token_type", "bearer"),
             "expires_in": expires_in,
@@ -228,7 +263,9 @@ def list_cached_sites() -> list[dict[str, Any]]:
     if not PROFILES_DIR.exists():
         return results
     for f in sorted(PROFILES_DIR.glob("*.json")):
-        site_id = f.stem
+        site_id, account = parse_profile_key(f.stem)
+        if site_id not in AUTH_DOMAINS:
+            continue
         try:
             data = json.loads(f.read_text())
         except (json.JSONDecodeError, OSError):
@@ -245,6 +282,7 @@ def list_cached_sites() -> list[dict[str, Any]]:
         results.append(
             {
                 "site_id": site_id,
+                "account": account,
                 "site_name": SITE_NAMES.get(site_id, site_id),
                 "user_id": data.get("user_id"),
                 "has_refresh_token": bool(data.get("refresh_token")),
@@ -453,6 +491,7 @@ def ensure_token(
     client_secret: str | None = None,
     redirect_uri: str | None = None,
     interactive: bool = True,
+    account: str | None = None,
 ) -> TokenStore:
     """Return a TokenStore with a valid access token for the given site.
 
@@ -470,7 +509,8 @@ def ensure_token(
     as a fallback. Keep PKCE enabled in the registered MercadoLibre application.
     """
     validate_site_id(site_id)
-    store = TokenStore(site_id)
+    account = normalize_account(account)
+    store = TokenStore(site_id, account)
 
     # 1. Cached and valid → done.
     if store.has_token() and not store.is_expired():
@@ -498,10 +538,13 @@ def ensure_token(
             store.clear()
 
     # 3. No valid/refreshable token.
+    account_flag = f" --account {account}" if account else ""
     if not interactive:
+        target = f"site '{site_id}'" + (f", account '{account}'" if account else "")
         raise RuntimeError(
-            f"No MercadoLibre token cached for site '{site_id}' ({SITE_NAMES.get(site_id, site_id)}). "
-            f"Run this once to authorize: uv run python -m mercadolibre_mcp.auth --site-id {site_id}"
+            f"No MercadoLibre token cached for {target} ({SITE_NAMES.get(site_id, site_id)}). "
+            f"Run this once to authorize: uv run python -m mercadolibre_mcp.auth "
+            f"--site-id {site_id}{account_flag}"
         )
 
     if not _client_id or not _client_secret:
@@ -519,10 +562,11 @@ def ensure_token(
     state = secrets.token_urlsafe(32)
 
     print(f"\n{'=' * 60}")
-    print(f"  MercadoLibre MCP — OAuth Setup ({SITE_NAMES.get(site_id, site_id)})")
+    account_label = f" / {account}" if account else ""
+    print(f"  MercadoLibre MCP — OAuth Setup ({SITE_NAMES.get(site_id, site_id)}{account_label})")
     print(f"{'=' * 60}")
     print("\n1. Opening browser to authorize with Mercado Libre...")
-    print(f"   Site: {site_id} - {SITE_NAMES.get(site_id, site_id)}")
+    print(f"   Site: {site_id}{account_label} - {SITE_NAMES.get(site_id, site_id)}")
     print("\n2. Log in (if needed) and click 'Allow'.")
     print("\n3. After authorizing, you'll be redirected to a URL.")
     print("   Copy the ENTIRE redirected URL and paste it here.\n")
@@ -551,12 +595,13 @@ def ensure_token(
     store.update(token_data)
 
     print("\n✓ Authentication successful!")
-    print(f"  Site: {site_id} - {SITE_NAMES.get(site_id, site_id)}")
+    print(f"  Site: {site_id}{account_label} - {SITE_NAMES.get(site_id, site_id)}")
     print(f"  User ID: {store.get_user_id()}")
     print(f"  Profile saved to: {store._path}")
     print("  You can now use the MCP server for this country.")
     print(
-        f"  To add another country, run: uv run python -m mercadolibre_mcp.auth --site-id <OTHER_SITE>\n"
+        "  To add another account in the same country, rerun with "
+        f"--account <ALIAS>. To add another country: --site-id <OTHER_SITE>\n"
     )
 
     return store
@@ -579,6 +624,12 @@ def run_setup() -> None:
         "--site-id",
         default=os.environ.get("MERCADOLIBRE_SITE_ID", "MLA"),
         help="MercadoLibre site ID to authorize (default: MLA). Run once per country.",
+    )
+    parser.add_argument(
+        "--account",
+        default=os.environ.get("MERCADOLIBRE_ACCOUNT") or None,
+        help="Optional account alias to authorize an additional account for the same site "
+        "(e.g. 'personal', 'business'). Omit for the site's default account.",
     )
     parser.add_argument(
         "--client-id",
@@ -611,11 +662,15 @@ def run_setup() -> None:
                 "No cached MercadoLibre profiles found. Run this command with --site-id to add one."
             )
             return
-        print(f"\n{'Site':<6} {'Country':<20} {'User ID':<14} {'Status'}")
-        print("-" * 60)
+        print(f"\n{'Site':<6} {'Account':<16} {'Country':<20} {'User ID':<14} {'Status'}")
+        print("-" * 78)
         for s in sites:
             status = "expired (auto-refreshes on use)" if s["is_expired"] else "valid"
-            print(f"{s['site_id']:<6} {s['site_name']:<20} {str(s['user_id']):<14} {status}")
+            account = s.get("account") or "-"
+            print(
+                f"{s['site_id']:<6} {account:<16} {s['site_name']:<20} "
+                f"{str(s['user_id']):<14} {status}"
+            )
         print()
         return
 
@@ -625,6 +680,7 @@ def run_setup() -> None:
         client_secret=args.client_secret,
         redirect_uri=args.redirect_uri,
         interactive=True,
+        account=args.account,
     )
 
 

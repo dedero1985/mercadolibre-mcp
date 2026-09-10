@@ -147,6 +147,31 @@ Or just ask your AI assistant — *"Which MercadoLibre countries am I authentica
 
 Every tool accepts an optional `site_id` argument that picks which cached profile executes the call (e.g. "list my listings in Uruguay" → `site_id="MLU"`); if omitted, it falls back to `MERCADOLIBRE_SITE_ID` (or `MLA`).
 
+### Multiple seller accounts in the same country
+
+A site has one **default** account plus any number of **aliased** accounts. Profiles are stored as:
+
+```
+~/.mercadolibre_mcp/profiles/MLA.json            # default account for MLA
+~/.mercadolibre_mcp/profiles/MLA__business.json  # aliased account for MLA
+```
+
+Authorize an additional account for a country you already use by adding `--account <alias>`:
+
+```bash
+uv run --env-file .env python -m mercadolibre_mcp.auth --site-id MLA --account business
+```
+
+Then pass the same alias on tool calls (`site_id="MLA"`, `account="business"`). Omit `account` to use the site's default account; `MERCADOLIBRE_ACCOUNT` sets a fallback alias for the server. Aliases are limited to 1-32 characters from `A-Z`, `a-z`, `0-9`, `_`, `-` and are validated so they can never escape the profiles directory.
+
+Writes (`create_item`, `update_item`, `delete_item`, `relist_item`) must use the alias that owns the listing. After authorizing a new alias, restart OpenCode so the in-memory client cache is rebuilt.
+
+List what is authorized, including aliases:
+
+```bash
+uv run --env-file .env python -m mercadolibre_mcp.auth --list
+```
+
 > **Advanced / not used here:** MercadoLibre also offers an official ["Global Selling" cross-border program](https://global-selling.mercadolibre.com) where a single approved merchant account can operate across Mexico, Brazil, Chile, Colombia, and Argentina with **one** token. It requires special onboarding with MercadoLibre and does **not** officially cover Uruguay, so it isn't used by this server — the standard per-country flow above works for any seller without special enrollment.
 
 ---
@@ -409,7 +434,7 @@ uv run python -m unittest discover -s tests -v
 
 Expected result: the command exits successfully and the unittest summary ends with `OK`. Any failure must be investigated before using or publishing the change.
 
-Tests cover the RFC 7636 S256 vector, fresh randomness, both Argentina and Uruguay authorization domains, a mocked code exchange, callback/state rejection (including trailing-slash normalization and value-free mismatch diagnostics), hidden input, redacted errors, browser-launcher output suppression, and cached/refresh/noninteractive behavior. They do not access real credentials, profiles, browsers, or the MercadoLibre API; the launcher regression uses a fake browser subprocess.
+Tests cover the RFC 7636 S256 vector, fresh randomness, both Argentina and Uruguay authorization domains, a mocked code exchange, callback/state rejection (including trailing-slash normalization and value-free mismatch diagnostics), hidden input, redacted errors, browser-launcher output suppression, account-alias validation and per-alias profile isolation, and cached/refresh/noninteractive behavior. They do not access real credentials, profiles, browsers, or the MercadoLibre API; the launcher regression uses a fake browser subprocess.
 
 To check the installed MCP separately:
 

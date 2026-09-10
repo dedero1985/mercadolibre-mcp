@@ -146,6 +146,31 @@ O simplemente preguntale a tu asistente de IA — *"¿En qué países de Mercado
 
 Todas las herramientas aceptan un parámetro opcional `site_id` que elige qué perfil autenticado ejecuta la llamada (ej. "mostrame mis publicaciones en Uruguay" → `site_id="MLU"`); si se omite, usa `MERCADOLIBRE_SITE_ID` (o `MLA`) por defecto.
 
+### Varias cuentas vendedoras en el mismo país
+
+Un sitio tiene una cuenta **predeterminada** más cualquier cantidad de cuentas **con alias**. Los perfiles se guardan así:
+
+```
+~/.mercadolibre_mcp/profiles/MLA.json            # cuenta predeterminada de MLA
+~/.mercadolibre_mcp/profiles/MLA__business.json  # cuenta con alias de MLA
+```
+
+Autorizá una cuenta adicional para un país que ya usás agregando `--account <alias>`:
+
+```bash
+uv run --env-file .env python -m mercadolibre_mcp.auth --site-id MLA --account business
+```
+
+Después pasá el mismo alias en las llamadas a herramientas (`site_id="MLA"`, `account="business"`). Omití `account` para usar la cuenta predeterminada del sitio; `MERCADOLIBRE_ACCOUNT` define un alias de respaldo para el servidor. Los alias admiten de 1 a 32 caracteres de `A-Z`, `a-z`, `0-9`, `_`, `-` y se validan para que nunca puedan salir del directorio de perfiles.
+
+Las escrituras (`create_item`, `update_item`, `delete_item`, `relist_item`) deben usar el alias dueño de la publicación. Después de autorizar un alias nuevo, reiniciá OpenCode para que se reconstruya la caché de clientes en memoria.
+
+Listá lo autorizado, incluidos los alias:
+
+```bash
+uv run --env-file .env python -m mercadolibre_mcp.auth --list
+```
+
 > **Avanzado / no usado acá:** Mercado Libre también ofrece un programa oficial de venta transfronteriza ["Global Selling"](https://global-selling.mercadolibre.com) donde una única cuenta de comerciante aprobada puede operar en México, Brasil, Chile, Colombia y Argentina con **un solo** token. Requiere un proceso de habilitación especial con Mercado Libre y **no** cubre oficialmente Uruguay, por lo que este servidor no lo utiliza — el flujo estándar por país de arriba funciona para cualquier vendedor sin inscripción especial.
 
 ---
@@ -390,7 +415,7 @@ uv run python -m unittest discover -s tests -v
 
 Resultado esperado: el comando termina correctamente y el resumen de unittest finaliza con `OK`. Cualquier fallo debe investigarse antes de usar o publicar el cambio.
 
-Las pruebas cubren el vector S256 de RFC 7636, aleatoriedad nueva, dominios de autorización de Argentina y Uruguay, intercambio de código simulado, rechazo de callback/state (incluida la normalización de barra final y diagnósticos sin valores), entrada oculta, errores sin datos sensibles, supresión de salida del lanzador del navegador y comportamiento con tokens vigentes, renovación y modo no interactivo. No acceden a credenciales, perfiles, navegadores ni a la API reales; la regresión del lanzador usa un subproceso de navegador simulado.
+Las pruebas cubren el vector S256 de RFC 7636, aleatoriedad nueva, dominios de autorización de Argentina y Uruguay, intercambio de código simulado, rechazo de callback/state (incluida la normalización de barra final y diagnósticos sin valores), entrada oculta, errores sin datos sensibles, supresión de salida del lanzador del navegador, validación de alias de cuenta y aislamiento de perfiles por alias, y comportamiento con tokens vigentes, renovación y modo no interactivo. No acceden a credenciales, perfiles, navegadores ni a la API reales; la regresión del lanzador usa un subproceso de navegador simulado.
 
 Para verificar el MCP instalado por separado:
 

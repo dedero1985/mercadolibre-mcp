@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import json
 import os
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from mercadolibre_mcp import auth
+from mercadolibre_mcp.client import MercadoLibreClient
 
 
 class PKCEPrimitivesTests(unittest.TestCase):
@@ -390,6 +392,116 @@ class OAuthFlowTests(unittest.TestCase):
         self.assertEqual(data["client_id"], "fake-env-client")
         self.assertEqual(data["client_secret"], "fake-env-secret")
         self.assertEqual(data["redirect_uri"], self.redirect_uri)
+
+
+class AccountAliasTests(unittest.TestCase):
+    def test_normalize_account_accepts_safe_aliases(self) -> None:
+        cases = (
+            (None, None),
+            ("", None),
+            ("   ", None),
+            ("personal", "personal"),
+            ("  business  ", "business"),
+            ("a_b-1", "a_b-1"),
+            ("a__b", "a__b"),
+            ("A" * 32, "A" * 32),
+        )
+        for value, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(auth.normalize_account(value), expected)
+
+    def test_normalize_account_rejects_unsafe_aliases(self) -> None:
+        for value in (
+            "../evil", "a/b", "a\\b", "a.b", "a b", "A" * 33, "café",
+            "..", "/etc/passwd", "a;b", "a\x00b",
+        ):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                auth.normalize_account(value)
+
+    def test_profile_key_and_parse_round_trip(self) -> None:
+        self.assertEqual(auth.profile_key("MLA"), "MLA")
+        self.assertEqual(auth.profile_key("MLA", "business"), "MLA__business")
+        self.assertEqual(auth.parse_profile_key("MLA"), ("MLA", None))
+        self.assertEqual(auth.parse_profile_key("MLU__personal"), ("MLU", "personal"))
+        self.assertEqual(auth.parse_profile_key("MLA__"), ("MLA", None))
+        # An alias may itself contain "__"; only the first separator splits.
+        self.assertEqual(auth.parse_profile_key("MLA__a__b"), ("MLA", "a__b"))
+
+    def test_token_store_paths_use_alias_and_never_traverse(self) -> None:
+        with patch.object(auth, "PROFILES_DIR", Path("/tmp/fake-profiles")):
+            self.assertEqual(auth.TokenStore("MLA")._path, Path("/tmp/fake-profiles/MLA.json"))
+            self.assertEqual(
+                auth.TokenStore("MLA", "business")._path,
+                Path("/tmp/fake-profiles/MLA__business.json"),
+            )
+            for alias in ("../escape", "a/b", "a\\b", "a.b", "a b"):
+                with self.subTest(alias=alias), self.assertRaises(ValueError):
+                    auth.TokenStore("MLA", alias)
+
+    def test_list_cached_sites_reports_aliases_and_skips_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profiles = Path(directory)
+            (profiles / "MLA.json").write_text(
+                json.dumps({"access_token": "a", "user_id": 1, "refresh_token": "r"})
+            )
+            (profiles / "MLU__personal.json").write_text(
+                json.dumps({"access_token": "b", "user_id": 2, "refresh_token": "r"})
+            )
+            (profiles / "ZZZ__x.json").write_text(json.dumps({"access_token": "c"}))
+            (profiles / "MLB.json").write_text(json.dumps({}))
+            with (
+                patch.object(auth, "PROFILES_DIR", profiles),
+                patch.object(auth, "LEGACY_TOKEN_FILE", profiles / "tokens.json"),
+            ):
+                sites = auth.list_cached_sites()
+        self.assertEqual(
+            [(s["site_id"], s["account"], s["user_id"]) for s in sites],
+            [("MLA", None, 1), ("MLU", "personal", 2)],
+        )
+
+    def test_ensure_token_binds_account_to_profile(self) -> None:
+        with patch.object(auth, "TokenStore") as store_factory:
+            store = store_factory.return_value
+            store.has_token.return_value = True
+            store.is_expired.return_value = False
+            result = auth.ensure_token("MLA", account="business", interactive=False)
+        store_factory.assert_called_once_with("MLA", "business")
+        self.assertIs(result, store)
+
+    def test_missing_token_error_names_account_and_flag(self) -> None:
+        with patch.object(auth, "TokenStore") as store_factory:
+            store_factory.return_value.has_token.return_value = False
+            with self.assertRaises(RuntimeError) as error:
+                auth.ensure_token("MLA", account="business", interactive=False)
+        message = str(error.exception)
+        self.assertIn("--account business", message)
+        self.assertIn("account 'business'", message)
+
+    def test_invalid_account_is_rejected_before_any_store(self) -> None:
+        with patch.object(auth, "TokenStore") as store_factory:
+            with self.assertRaises(ValueError):
+                auth.ensure_token("MLA", account="../evil", interactive=False)
+        store_factory.assert_not_called()
+
+
+class AccountResolutionTests(unittest.TestCase):
+    def test_resolve_account_from_arg_env_and_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(MercadoLibreClient.resolve_account(None))
+            self.assertEqual(MercadoLibreClient.resolve_account("business"), "business")
+        with patch.dict(os.environ, {"MERCADOLIBRE_ACCOUNT": "personal"}, clear=True):
+            self.assertEqual(MercadoLibreClient.resolve_account(None), "personal")
+
+    def test_resolve_account_rejects_unsafe_alias(self) -> None:
+        for alias in ("../evil", "a/b", "a b"):
+            with self.subTest(alias=alias), self.assertRaises(ValueError):
+                MercadoLibreClient.resolve_account(alias)
+
+    def test_client_exposes_account_from_store(self) -> None:
+        store = Mock(site_id="MLA", account="business")
+        client = MercadoLibreClient(store)
+        self.assertEqual(client.site_id, "MLA")
+        self.assertEqual(client.account, "business")
 
 
 if __name__ == "__main__":

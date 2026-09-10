@@ -39,20 +39,24 @@ logger = logging.getLogger(__name__)
 
 # ── Shared HTTP clients — one per site/country, created lazily ─────────────
 
-_clients: dict[str, MercadoLibreClient] = {}
+_clients: dict[tuple[str, str | None], MercadoLibreClient] = {}
 
 
-def get_client(site_id: str | None = None) -> MercadoLibreClient:
-    """Return a ready, token-fresh client for the given (or default) site.
+def get_client(site_id: str | None = None, account: str | None = None) -> MercadoLibreClient:
+    """Return a ready, token-fresh client for the given (or default) site + account.
 
-    Raises RuntimeError with a clear message if that country hasn't been
-    authorized yet — callers should catch this alongside MercadoLibreError.
+    `account` is an optional alias selecting an additional seller account in the
+    same country (e.g. 'personal', 'business'); omit it for the site's default
+    account. Raises RuntimeError with a clear message if that site/account hasn't
+    been authorized yet — callers should catch this alongside MercadoLibreError.
     """
     site = MercadoLibreClient.resolve_site_id(site_id)
-    client = _clients.get(site)
+    acct = MercadoLibreClient.resolve_account(account)
+    key = (site, acct)
+    client = _clients.get(key)
     if client is None:
-        client = MercadoLibreClient.create(site_id=site)
-        _clients[site] = client
+        client = MercadoLibreClient.create(site_id=site, account=acct)
+        _clients[key] = client
     client.ensure_fresh_token()
     return client
 
@@ -71,6 +75,20 @@ class SiteParam(BaseModel):
         description="MercadoLibre site ID selecting which authenticated country profile to use "
         "(e.g., 'MLA'=Argentina, 'MLU'=Uruguay, 'MLB'=Brasil). Defaults to MERCADOLIBRE_SITE_ID "
         "env var or MLA. Use list_authenticated_sites to see which ones are ready.",
+    )
+    account: str | None = Field(
+        default=None,
+        description="Optional account alias selecting an additional seller account authorized "
+        "for the same country (e.g. 'personal', 'business'). Defaults to MERCADOLIBRE_ACCOUNT "
+        "env var or the site's default account. Use list_authenticated_sites to see aliases.",
+    )
+
+
+def _resolve(input: SiteParam) -> tuple[str, str | None]:
+    """Resolve the effective (site_id, account) for a tool call."""
+    return (
+        MercadoLibreClient.resolve_site_id(input.site_id),
+        MercadoLibreClient.resolve_account(input.account),
     )
 
 
@@ -262,7 +280,7 @@ async def search_items(input: SearchItemsInput) -> dict:
       - "Find laptops in Brazil" → query="notebook", site_id="MLB"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
+        site, account = _resolve(input)
         params = {
             "q": input.query,
             "limit": min(input.limit, 100),
@@ -280,7 +298,7 @@ async def search_items(input: SearchItemsInput) -> dict:
         if input.offset is not None:
             params["offset"] = input.offset
 
-        data = get_client(site).get(f"sites/{site}/search", params=params)
+        data = get_client(site, account).get(f"sites/{site}/search", params=params)
         results = [_item_summary(r) for r in data.get("results", [])]
         return {
             "site_id": site,
@@ -305,8 +323,8 @@ async def get_item(input: GetItemInput) -> dict:
       - "Show me the listing information for MLB987654321"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
-        data = get_client(site).get(f"items/{input.item_id}")
+        site, account = _resolve(input)
+        data = get_client(site, account).get(f"items/{input.item_id}")
         return _item_summary(data) | {
             "warranty": data.get("warranty"),
             "listing_type_id": data.get("listing_type_id"),
@@ -336,7 +354,7 @@ async def create_item(input: CreateItemInput) -> dict:
       - "Publish a new running shoes product in Uruguay for 2500 UYU" → site_id="MLU"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
+        site, account = _resolve(input)
         body = {
             "title": input.title,
             "category_id": input.category_id,
@@ -352,7 +370,7 @@ async def create_item(input: CreateItemInput) -> dict:
             body["pictures"] = [{"source": url} for url in input.pictures_urls]
         if input.tags:
             body["tags"] = input.tags
-        data = get_client(site).post("items", json_body=body)
+        data = get_client(site, account).post("items", json_body=body)
         return {
             "success": True,
             "site_id": site,
@@ -374,7 +392,7 @@ async def update_item(input: UpdateItemInput) -> dict:
       - "Change stock of item MLU987654321 to 50 units" → site_id="MLU"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
+        site, account = _resolve(input)
         body: dict = {}
         if input.title is not None:
             body["title"] = input.title
@@ -390,7 +408,7 @@ async def update_item(input: UpdateItemInput) -> dict:
         if not body:
             return {"error": "No fields to update provided"}
 
-        data = get_client(site).put(f"items/{input.item_id}", json_body=body)
+        data = get_client(site, account).put(f"items/{input.item_id}", json_body=body)
         return {"success": True, "item_id": data.get("id"), "status": data.get("status")}
     except _CLIENT_ERRORS as e:
         return {"error": str(e)}
@@ -407,8 +425,8 @@ async def delete_item(input: DeleteItemInput) -> dict:
       - "Finish my ad for MLU987654321" → site_id="MLU"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
-        data = get_client(site).put(f"items/{input.item_id}", json_body={"status": "closed"})
+        site, account = _resolve(input)
+        data = get_client(site, account).put(f"items/{input.item_id}", json_body={"status": "closed"})
         return {"success": True, "item_id": input.item_id, "status": data.get("status")}
     except _CLIENT_ERRORS as e:
         return {"error": str(e)}
@@ -422,8 +440,8 @@ async def list_my_items(input: ListMyItemsInput) -> dict:
       - "List my paused items in Uruguay" → site_id="MLU"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
-        client = get_client(site)
+        site, account = _resolve(input)
+        client = get_client(site, account)
         user_id = client.get_user_id()
         if not user_id:
             return {"error": f"Cannot determine user ID for site '{site}'. Re-run OAuth setup."}
@@ -465,11 +483,11 @@ async def relist_item(input: RelistItemInput) -> dict:
       - "Republish my finished ad with 10 units available" → site_id="MLU"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
+        site, account = _resolve(input)
         body: dict = {}
         if input.quantity is not None:
             body["available_quantity"] = input.quantity
-        data = get_client(site).put(f"items/{input.item_id}/relist", json_body=body)
+        data = get_client(site, account).put(f"items/{input.item_id}/relist", json_body=body)
         return {"success": True, "new_item_id": data.get("id"), "permalink": data.get("permalink")}
     except _CLIENT_ERRORS as e:
         return {"error": str(e)}
@@ -486,8 +504,8 @@ async def list_categories(input: ListCategoriesInput) -> dict:
       - "List categories for Uruguay" → site_id="MLU"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
-        data = get_client(site).get(f"sites/{site}/categories")
+        site, account = _resolve(input)
+        data = get_client(site, account).get(f"sites/{site}/categories")
         return {"site_id": site, "categories": data}
     except _CLIENT_ERRORS as e:
         return {"error": str(e)}
@@ -501,8 +519,8 @@ async def get_category(input: GetCategoryInput) -> dict:
       - "What are the attributes for category MLU1000?"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
-        data = get_client(site).get(f"categories/{input.category_id}")
+        site, account = _resolve(input)
+        data = get_client(site, account).get(f"categories/{input.category_id}")
         return data
     except _CLIENT_ERRORS as e:
         return {"error": str(e)}
@@ -516,8 +534,8 @@ async def predict_category(input: PredictCategoryInput) -> dict:
       - "Predict category for 'Zapatillas Nike Running Hombre'" → site_id="MLU"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
-        data = get_client(site).get(
+        site, account = _resolve(input)
+        data = get_client(site, account).get(
             f"sites/{site}/domain_discovery/search",
             params={"q": input.title},
         )
@@ -540,8 +558,8 @@ async def search_orders(input: SearchOrdersInput) -> dict:
       - "Get orders that are pending shipment"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
-        client = get_client(site)
+        site, account = _resolve(input)
+        client = get_client(site, account)
         user_id = client.get_user_id()
         if not user_id:
             return {"error": f"Cannot determine user ID for site '{site}'. Re-run OAuth setup."}
@@ -569,8 +587,8 @@ async def get_order(input: GetOrderInput) -> dict:
       - "Show me details for order 1234567890" → site_id="MLA" (or wherever the order lives)
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
-        data = get_client(site).get(f"orders/{input.order_id}")
+        site, account = _resolve(input)
+        data = get_client(site, account).get(f"orders/{input.order_id}")
         return data
     except _CLIENT_ERRORS as e:
         return {"error": str(e)}
@@ -586,8 +604,8 @@ async def get_shipping_methods(input: GetShippingMethodsInput) -> dict:
       - "What shipping options are available for item MLA123 to zip 11000?"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
-        client = get_client(site)
+        site, account = _resolve(input)
+        client = get_client(site, account)
         item_data = client.get(f"items/{input.item_id}")
         data = client.get(
             f"sites/{site}/shipping_methods",
@@ -609,8 +627,8 @@ async def get_shipment(input: GetShipmentInput) -> dict:
       - "Track shipment 987654321"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
-        data = get_client(site).get(f"shipments/{input.shipment_id}")
+        site, account = _resolve(input)
+        data = get_client(site, account).get(f"shipments/{input.shipment_id}")
         return {
             "id": data.get("id"),
             "status": data.get("status"),
@@ -637,14 +655,14 @@ async def list_questions(input: ListQuestionsInput) -> dict:
       - "List questions about item MLU1234567890"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
+        site, account = _resolve(input)
         params: dict = {}
         if input.item_id:
             params["item_id"] = input.item_id
         if input.status:
             params["status"] = input.status
         params["limit"] = min(input.limit, 200)
-        data = get_client(site).get("questions/search", params=params)
+        data = get_client(site, account).get("questions/search", params=params)
         return {"results": data.get("questions", data.get("results", []))}
     except _CLIENT_ERRORS as e:
         return {"error": str(e)}
@@ -657,8 +675,8 @@ async def answer_question(input: AnswerQuestionInput) -> dict:
       - "Answer question 98765 with 'Yes, we have stock'"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
-        data = get_client(site).post(
+        site, account = _resolve(input)
+        data = get_client(site, account).post(
             "answers",
             json_body={"question_id": input.question_id, "text": input.answer_text},
         )
@@ -680,8 +698,8 @@ async def get_user(input: GetUserInput) -> dict:
       - "Show seller reputation for user 123456789"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
-        client = get_client(site)
+        site, account = _resolve(input)
+        client = get_client(site, account)
         if input.user_id:
             data = client.get(f"users/{input.user_id}")
         else:
@@ -715,8 +733,8 @@ async def list_ads_campaigns(input: ListCampaignsInput) -> dict:
       - "List my Mercado Ads campaigns in Uruguay" → site_id="MLU"
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
-        client = get_client(site)
+        site, account = _resolve(input)
+        client = get_client(site, account)
         user_id = client.get_user_id()
         if not user_id:
             return {"error": f"Cannot determine user ID for site '{site}'. Re-run OAuth setup."}
@@ -740,11 +758,11 @@ async def get_item_visits(input: GetItemVisitsInput) -> dict:
       - "Show me last week's visits for item MLU987654321" → last_week=true
     """
     try:
-        site = MercadoLibreClient.resolve_site_id(input.site_id)
+        site, account = _resolve(input)
         path = f"items/{input.item_id}/visits"
         if input.last_week:
             path += "?last_week=true"
-        data = get_client(site).get(path)
+        data = get_client(site, account).get(path)
         return {"item_id": input.item_id, "visits": data}
     except _CLIENT_ERRORS as e:
         return {"error": str(e)}
@@ -775,7 +793,8 @@ async def list_authenticated_sites(input: ListAuthenticatedSitesInput) -> dict:
     return {
         "authenticated": cached,
         "not_authenticated": not_authenticated,
-        "hint": "Run `uv run python -m mercadolibre_mcp.auth --site-id <SITE_ID>` to add a country.",
+        "hint": "Run `uv run python -m mercadolibre_mcp.auth --site-id <SITE_ID>` to add a country, "
+        "or add `--account <alias>` to authorize an additional account for a country you already use.",
     }
 
 
@@ -790,7 +809,12 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[None]:
     logger.info("Starting MercadoLibre MCP Server")
     cached = list_cached_sites()
     if cached:
-        sites = ", ".join(f"{c['site_id']} ({c['site_name']})" for c in cached)
+        sites = ", ".join(
+            f"{c['site_id']}"
+            + (f"/{c['account']}" if c.get("account") else "")
+            + f" ({c['site_name']})"
+            for c in cached
+        )
         logger.info("Authenticated profiles: %s", sites)
     else:
         logger.warning(
@@ -808,9 +832,11 @@ mcp = FastMCP(
     instructions="MCP server for MercadoLibre's REST API — manage listings, orders, shipping, ads, "
     "and more across 18 countries. Every tool accepts an optional site_id (MLA=Argentina, "
     "MLU=Uruguay, MLB=Brasil, etc.) to select which authenticated country profile executes the "
-    "call; it defaults to MERCADOLIBRE_SITE_ID. Each country requires its own one-time OAuth "
-    "authorization (run the auth CLI once per country) since MercadoLibre seller accounts are "
-    "typically per-country. Use list_authenticated_sites to see what's ready. "
+    "call; it defaults to MERCADOLIBRE_SITE_ID. Tools also accept an optional account alias to "
+    "select an additional seller account authorized for the same country (run the auth CLI with "
+    "--account <alias>); it defaults to MERCADOLIBRE_ACCOUNT or the site's default account. "
+    "Each country/account requires its own one-time OAuth authorization since MercadoLibre "
+    "seller accounts are typically per-country. Use list_authenticated_sites to see what's ready. "
     "Credentials are loaded from environment variables, never exposed to the LLM.",
     lifespan=server_lifespan,
 )
