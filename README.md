@@ -48,7 +48,7 @@ This server is built against the official MercadoLibre API:
 
 ```bash
 # Clone
-git clone https://github.com/YOUR_USER/mercadolibre-mcp.git
+git clone https://github.com/dedero1985/mercadolibre-mcp.git
 cd mercadolibre-mcp
 
 # Install dependencies
@@ -67,7 +67,7 @@ uv run python -c "from mercadolibre_mcp.main import mcp; print('MCP server ready
 3. Fill in:
    - **Application Name**: e.g., `mercadolibre-mcp`
    - **Description**: Short description of your use
-   - **Redirect URI**: Use `http://localhost:8080/callback` (if you're testing locally)
+   - **Redirect URI**: Use the exact, static URL registered for your application. Do not assume the CLI's `http://localhost:8080/callback` default is registered or accepted for your app.
 4. After creation, you'll get:
    - **`App ID`** (client_id) — a numeric ID
    - **`Secret Key`** (client_secret) — a long alphanumeric string
@@ -82,7 +82,9 @@ uv run python -c "from mercadolibre_mcp.main import mcp; print('MCP server ready
 Copy the example file:
 
 ```bash
+umask 077
 cp .env.example .env
+chmod 600 .env
 ```
 
 Edit `.env` with your credentials:
@@ -90,7 +92,7 @@ Edit `.env` with your credentials:
 ```env
 MERCADOLIBRE_CLIENT_ID=1234567890
 MERCADOLIBRE_CLIENT_SECRET=your_secret_key_here
-MERCADOLIBRE_REDIRECT_URI=http://localhost:8080/callback
+MERCADOLIBRE_REDIRECT_URI=https://your-registered-callback.example/callback
 MERCADOLIBRE_SITE_ID=MLA
 ```
 
@@ -102,6 +104,10 @@ MERCADOLIBRE_SITE_ID=MLA
 | `MERCADOLIBRE_SITE_ID` | ❌ No | **Default/fallback** site used when a tool call doesn't specify one (e.g. MLA, MLU). Not a restriction — see multi-country setup below. |
 | `LOG_LEVEL` | ❌ No | `INFO`, `DEBUG`, `WARNING`, `ERROR` |
 
+The Python modules do **not** automatically load `.env`. From the repository directory, use `uv run --env-file .env ...` as shown below, or supply the variables through a secure process environment. For client launch commands, add `--env-file` and the absolute path to `.env` after `run` unless the client already inherits the variables. Never commit `.env`, paste credentials into chat, or put secrets in command-line arguments.
+
+See the [official OAuth documentation](https://developers.mercadolibre.com.uy/es_ar/autenticacion-y-autorizacion): authorize with the account owner/administrator, not a collaborator; the redirect URI must match exactly. **Current limitation:** this CLI does not implement PKCE or OAuth `state` validation. Apps requiring PKCE need a compatible authorization implementation before this CLI can be used; do not weaken app security to bypass that requirement. Refresh tokens are single-use and tied to the issuing App ID, so do not share them with an old integration or reuse tokens from a different app.
+
 ### 3. Run OAuth Setup — once per country
 
 **One app, multiple tokens.** The `MERCADOLIBRE_CLIENT_ID` / `MERCADOLIBRE_CLIENT_SECRET` above are shared across **all 18 countries** — you register the application only once, and the same `.env` values work everywhere. However, the **access token** produced by the OAuth flow belongs to one specific MercadoLibre **seller account**, and seller accounts are normally registered under a single home country. If you sell in both Argentina and Uruguay with two separate accounts, you must authorize **each one separately** — same app credentials, two different tokens.
@@ -110,10 +116,10 @@ Run the setup once per country you operate in:
 
 ```bash
 # Authorize your Argentina account
-uv run python -m mercadolibre_mcp.auth --site-id MLA
+uv run --env-file .env python -m mercadolibre_mcp.auth --site-id MLA
 
 # Authorize your Uruguay account
-uv run python -m mercadolibre_mcp.auth --site-id MLU
+uv run --env-file .env python -m mercadolibre_mcp.auth --site-id MLU
 
 # ...repeat for any other country/account you have
 ```
@@ -122,6 +128,8 @@ Each run will:
 1. Open your browser to authorize that country's account
 2. Ask you to paste the redirected URL
 3. Save an access token to `~/.mercadolibre_mcp/profiles/<SITE_ID>.json` (e.g. `MLA.json`, `MLU.json`)
+
+Run OAuth in your own interactive terminal. Paste the redirected URL only into that terminal, never into an AI conversation. The CLI opens a browser; it does not start a callback HTTP server.
 
 Tokens are saved **locally on your machine**, one file per country, and are **never sent to the LLM**. The MCP server uses them server-side to authenticate API calls, refreshing each one automatically as it expires.
 
@@ -211,19 +219,32 @@ Add to `~/.windsurf/mcp_config.json` (same format as Cursor).
 
 ### OpenCode
 
-OpenCode can discover the server via environment variables or you can configure it in `.opencode/mcp_servers.json`:
+Merge the following into `~/.config/opencode/opencode.json` (or `opencode.jsonc`) for global use, or a project-root `opencode.json` / `opencode.jsonc` for that project. Preserve unrelated settings. OpenCode uses the top-level `mcp` object, **not** `.opencode/mcp_servers.json` or `mcpServers`.
 
 ```json
 {
-  "servers": {
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
     "mercadolibre": {
-      "type": "stdio",
-      "command": "uv",
-      "args": ["--directory", "/ABSOLUTE/PATH/TO/mercadolibre-mcp", "run", "python", "-m", "mercadolibre_mcp.main"]
+      "type": "local",
+      "command": [
+        "/ABSOLUTE/PATH/TO/uv",
+        "--directory", "/ABSOLUTE/PATH/TO/mercadolibre-mcp",
+        "run", "--env-file", "/ABSOLUTE/PATH/TO/mercadolibre-mcp/.env",
+        "python", "-m", "mercadolibre_mcp.main"
+      ],
+      "enabled": true,
+      "timeout": 30000
     }
   }
 }
 ```
+
+Replace all paths with real absolute paths; `command -v uv` shows the executable location. `command` is one array containing the executable and all arguments; there is no separate `args` field. The local process communicates over stdio even though OpenCode's configuration type is `local`. Keep credentials in the protected `.env` file, not this JSON. Set `MERCADOLIBRE_SITE_ID=MLU` there for a Uruguay default; use `site_id="MLA"` for Argentina. One server supports both profiles.
+
+Quit and restart OpenCode after saving, then run `opencode mcp list` to verify the connection. A connected MCP server does **not** mean either seller account is authorized: complete the per-country OAuth steps above and check `list_authenticated_sites`. `opencode mcp auth` handles remote MCP OAuth and is not the seller authorization flow for this local server.
+
+Reference: [OpenCode MCP configuration](https://opencode.ai/docs/mcp-servers/) and [configuration schema](https://opencode.ai/config.json).
 
 ### Muster (if you use the Muster aggregator)
 
