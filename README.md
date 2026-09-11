@@ -22,6 +22,50 @@ Credentials and tokens are loaded from environment variables **never** passed th
 - **Metrics** — get item visits and analytics
 - **User profiles** — get seller/buyer reputation
 
+## How it works
+
+In plain terms: you talk to an AI assistant, the assistant calls this MCP server, and the server talks to MercadoLibre using your authorized seller account. Your API keys and tokens stay on your machine — the AI never sees them.
+
+```mermaid
+flowchart LR
+    You([You]) -->|"plain-language request"| AI["AI assistant<br/>(OpenCode, Claude, Cursor...)"]
+    AI -->|"MCP protocol (stdio)"| MCP["MercadoLibre MCP server<br/>(local process)"]
+    MCP -->|"HTTPS + access token"| ML[("MercadoLibre API")]
+    MCP -->|"reads/writes tokens"| Store[("Local token store<br/>~/.mercadolibre_mcp")]
+    ML -->|"results"| MCP
+    MCP -->|"results"| AI
+    AI -->|"answer"| You
+```
+
+1. **You** ask for something, e.g. "list my active listings in Uruguay".
+2. **The AI assistant** picks the right tool and calls the **MCP server**.
+3. **The MCP server** loads the matching token (by country, and account if you have several), calls the **MercadoLibre API**, and returns the result.
+4. **The AI assistant** shows you the answer. Secrets are used only inside the server process, never in the conversation.
+
+### One-time setup per account
+
+Authorization happens **once per seller account**, in your own browser. This is what creates the local token:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant You
+    participant CLI as Setup command
+    participant Browser
+    participant ML as MercadoLibre
+    participant Store as Local token store
+    You->>CLI: auth --site-id MLU (add --account business for a 2nd account)
+    CLI->>Browser: open authorization page (PKCE S256)
+    You->>Browser: log in and click Allow
+    Browser-->>CLI: paste the redirected URL
+    CLI->>ML: exchange code + PKCE verifier
+    ML-->>CLI: access + refresh token
+    CLI->>Store: save the profile
+    Note over You,Store: Later calls refresh the token automatically
+```
+
+Once a profile exists, everyday use needs no browser and no extra login.
+
 ## Sources & Documentation
 
 This server is built against the official MercadoLibre API:

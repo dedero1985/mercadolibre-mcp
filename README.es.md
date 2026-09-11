@@ -22,6 +22,50 @@ Las credenciales y tokens se cargan desde variables de entorno y **nunca pasan p
 - **Métricas** — obtener visitas y estadísticas de artículos
 - **Perfiles** — ver reputación de vendedor/comprador
 
+## Cómo funciona
+
+En simple: le hablás a un asistente de IA, el asistente llama a este servidor MCP, y el servidor se comunica con Mercado Libre usando tu cuenta vendedora autorizada. Tus claves y tokens quedan en tu máquina — la IA nunca los ve.
+
+```mermaid
+flowchart LR
+    You([Vos]) -->|"pedido en lenguaje natural"| AI["Asistente de IA<br/>(OpenCode, Claude, Cursor...)"]
+    AI -->|"protocolo MCP (stdio)"| MCP["Servidor MCP de Mercado Libre<br/>(proceso local)"]
+    MCP -->|"HTTPS + access token"| ML[("API de Mercado Libre")]
+    MCP -->|"lee/escribe tokens"| Store[("Almacén local de tokens<br/>~/.mercadolibre_mcp")]
+    ML -->|"resultados"| MCP
+    MCP -->|"resultados"| AI
+    AI -->|"respuesta"| You
+```
+
+1. **Vos** pedís algo, por ejemplo "mostrame mis publicaciones activas en Uruguay".
+2. **El asistente de IA** elige la herramienta correcta y llama al **servidor MCP**.
+3. **El servidor MCP** carga el token correspondiente (por país y, si tenés varias, por cuenta), llama a la **API de Mercado Libre** y devuelve el resultado.
+4. **El asistente de IA** te muestra la respuesta. Las credenciales se usan solo dentro del proceso del servidor, nunca en la conversación.
+
+### Configuración única por cuenta
+
+La autorización se hace **una vez por cuenta vendedora**, en tu propio navegador. Eso es lo que crea el token local:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant You as Vos
+    participant CLI as Comando de setup
+    participant Browser as Navegador
+    participant ML as Mercado Libre
+    participant Store as Almacén local de tokens
+    You->>CLI: auth --site-id MLU (con --account business para una 2ª cuenta)
+    CLI->>Browser: abre la página de autorización (PKCE S256)
+    You->>Browser: iniciás sesión y hacés clic en Permitir
+    Browser-->>CLI: pegás la URL redirigida
+    CLI->>ML: intercambia el código + verificador PKCE
+    ML-->>CLI: access + refresh token
+    CLI->>Store: guarda el perfil
+    Note over You,Store: Las llamadas posteriores renuevan el token automáticamente
+```
+
+Una vez que existe el perfil, el uso diario no necesita navegador ni otro inicio de sesión.
+
 ## Fuentes y Documentación
 
 Este servidor está construido sobre la API oficial de Mercado Libre:
