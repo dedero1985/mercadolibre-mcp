@@ -427,6 +427,32 @@ Para verificar el MCP instalado por separado:
 
 Que las pruebas sin conexión pasen o que el servidor aparezca conectado no demuestra que la autorización real de las cuentas esté completa.
 
+## Desarrollo
+
+Las contribuciones son bienvenidas. El proyecto apunta a Python 3.11+ y usa [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync --extra dev                 # dependencias de ejecución + herramientas de desarrollo
+uv run --extra dev python -m unittest discover -s tests -v
+uv run --extra dev ruff check src tests
+```
+
+La CI (`.github/workflows/ci.yml`) ejecuta lint y pruebas en cada push y pull request, así que un PR solo necesita que esos dos comandos pasen.
+
+### Versionado
+
+La versión tiene una **única fuente de verdad**: `__version__` en `src/mercadolibre_mcp/__init__.py`. `pyproject.toml` la lee con Hatch y el servidor MCP la informa — no hay nada más que mantener sincronizado. Para publicar una versión, cambiá esa única línea y etiquetá:
+
+```bash
+git tag v0.4.0 && git push origin v0.4.0
+```
+
+Confirmá qué build estás ejecutando con:
+
+```bash
+uv run mercadolibre-mcp --version
+```
+
 ## Licencia
 
 MIT

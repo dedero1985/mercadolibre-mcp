@@ -77,7 +77,8 @@ class MercadoLibreClient:
             )
             raise RuntimeError(
                 f"No access token available for {label}. "
-                f"Run: uv run python -m mercadolibre_mcp.auth --site-id {self.site_id}{account_flag}"
+                f"Run: uv run python -m mercadolibre_mcp.auth "
+                f"--site-id {self.site_id}{account_flag}"
             )
         return {
             "Authorization": f"Bearer {token}",

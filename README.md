@@ -446,6 +446,32 @@ To check the installed MCP separately:
 
 Passing offline tests or seeing a connected server does not prove that live account authorization is complete.
 
+## Development
+
+Contributions are welcome. The project targets Python 3.11+ and uses [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync --extra dev                 # runtime + dev tools
+uv run --extra dev python -m unittest discover -s tests -v
+uv run --extra dev ruff check src tests
+```
+
+CI (`.github/workflows/ci.yml`) runs lint and tests on every push and pull request, so a PR only needs those two commands to pass.
+
+### Versioning
+
+The version has a **single source of truth**: `__version__` in `src/mercadolibre_mcp/__init__.py`. `pyproject.toml` reads it via Hatch, and the MCP server reports it — there is nothing else to keep in sync. To release, bump that one line and tag:
+
+```bash
+git tag v0.4.0 && git push origin v0.4.0
+```
+
+Confirm which build you are running with:
+
+```bash
+uv run mercadolibre-mcp --version
+```
+
 ## License
 
 MIT

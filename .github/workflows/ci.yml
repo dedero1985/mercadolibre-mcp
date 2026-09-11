@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.1.0
+      - name: Sync dependencies (including dev tools)
+        run: uv sync --extra dev
+      - name: Lint
+        run: uv run --extra dev ruff check src tests
+      - name: Tests
+        run: uv run --extra dev python -m unittest discover -s tests -v

@@ -1,6 +1,6 @@
 [project]
 name = "mercadolibre-mcp"
-version = "0.1.0"
+dynamic = ["version"]
 description = "MCP server for MercadoLibre's REST API — full CRUD for listings, orders, shipping, ads, and more across 18 countries"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -39,12 +39,20 @@ mercadolibre-mcp = "mercadolibre_mcp.main:run"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.version]
+# Single source of truth for the version — bump only src/mercadolibre_mcp/__init__.py.
+path = "src/mercadolibre_mcp/__init__.py"
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test assertions and data tables read better on a single line.
+"tests/*" = ["E501"]
 
 [tool.pyright]
 pythonVersion = "3.11"

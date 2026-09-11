@@ -26,12 +26,14 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from mercadolibre_mcp import __version__
 from mercadolibre_mcp.auth import ALL_SITE_IDS, SITE_NAMES, list_cached_sites
 from mercadolibre_mcp.client import MercadoLibreClient, MercadoLibreError
 
@@ -276,7 +278,8 @@ async def search_items(input: SearchItemsInput) -> dict:
 
     **Usage examples:**
       - "Find iPhone 15 in Argentina" → query="iPhone 15", site_id="MLA"
-      - "Search for zapatillas running under 5000 pesos in Uruguay" → query="zapatillas running", price_max=5000, site_id="MLU"
+      - "Search for zapatillas running under 5000 pesos in Uruguay" →
+        query="zapatillas running", price_max=5000, site_id="MLU"
       - "Find laptops in Brazil" → query="notebook", site_id="MLB"
     """
     try:
@@ -426,7 +429,9 @@ async def delete_item(input: DeleteItemInput) -> dict:
     """
     try:
         site, account = _resolve(input)
-        data = get_client(site, account).put(f"items/{input.item_id}", json_body={"status": "closed"})
+        data = get_client(site, account).put(
+            f"items/{input.item_id}", json_body={"status": "closed"}
+        )
         return {"success": True, "item_id": input.item_id, "status": data.get("status")}
     except _CLIENT_ERRORS as e:
         return {"error": str(e)}
@@ -793,8 +798,9 @@ async def list_authenticated_sites(input: ListAuthenticatedSitesInput) -> dict:
     return {
         "authenticated": cached,
         "not_authenticated": not_authenticated,
-        "hint": "Run `uv run python -m mercadolibre_mcp.auth --site-id <SITE_ID>` to add a country, "
-        "or add `--account <alias>` to authorize an additional account for a country you already use.",
+        "hint": "Run `uv run python -m mercadolibre_mcp.auth --site-id <SITE_ID>` to add a "
+        "country, or add `--account <alias>` to authorize an additional account for a "
+        "country you already use.",
     }
 
 
@@ -828,7 +834,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[None]:
 # Create the FastMCP server
 mcp = FastMCP(
     "MercadoLibre API",
-    version="0.2.0",
+    version=__version__,
     instructions="MCP server for MercadoLibre's REST API — manage listings, orders, shipping, ads, "
     "and more across 18 countries. Every tool accepts an optional site_id (MLA=Argentina, "
     "MLU=Uruguay, MLB=Brasil, etc.) to select which authenticated country profile executes the "
@@ -885,7 +891,14 @@ except (ImportError, AttributeError):
 
 
 def run() -> None:
-    """Entry point for `mercadolibre-mcp` CLI command."""
+    """Entry point for `mercadolibre-mcp` CLI command.
+
+    `mercadolibre-mcp --version` prints the version and exits without starting
+    the server, so you can confirm which build you are running.
+    """
+    if "--version" in sys.argv[1:]:
+        print(f"mercadolibre-mcp {__version__}")
+        return
     mcp.run(transport="stdio")
 
 

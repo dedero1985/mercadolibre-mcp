@@ -34,7 +34,7 @@ import secrets
 import subprocess
 import sys
 import warnings
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import SplitResult, parse_qs, urlencode, urlsplit
@@ -215,7 +215,7 @@ class TokenStore:
         if not expires_at:
             return True
         try:
-            return datetime.fromisoformat(expires_at) <= datetime.now(timezone.utc)
+            return datetime.fromisoformat(expires_at) <= datetime.now(UTC)
         except (TypeError, ValueError):
             return True
 
@@ -238,7 +238,7 @@ class TokenStore:
             "token_type": token_data.get("token_type", "bearer"),
             "expires_in": expires_in,
             "expires_at": (
-                datetime.now(timezone.utc) + timedelta(seconds=expires_in - 300)
+                datetime.now(UTC) + timedelta(seconds=expires_in - 300)
             ).isoformat(),  # refresh 5 min early
             "scope": token_data.get("scope", ""),
             "user_id": token_data.get("user_id"),
@@ -276,7 +276,7 @@ def list_cached_sites() -> list[dict[str, Any]]:
         is_expired = True
         if expires_at:
             try:
-                is_expired = datetime.fromisoformat(expires_at) <= datetime.now(timezone.utc)
+                is_expired = datetime.fromisoformat(expires_at) <= datetime.now(UTC)
             except (TypeError, ValueError):
                 pass
         results.append(
@@ -377,12 +377,16 @@ def _validate_callback(redirected_url: str, redirect_uri: str, expected_state: s
     if any(sorted(query.get(key, [])) != sorted(values) for key, values in static_query.items()):
         raise RuntimeError("OAuth callback does not preserve the registered query parameters.")
     if {"error", "error_description", "error_uri"}.intersection(query):
-        raise RuntimeError("OAuth authorization was not successful. Restart setup and authorize again.")
+        raise RuntimeError(
+            "OAuth authorization was not successful. Restart setup and authorize again."
+        )
     for key in ("code", "state"):
         values = query.get(key, [])
         if len(values) != 1 or not values[0].strip():
             raise RuntimeError("OAuth callback requires exactly one nonblank code and state.")
-    if not secrets.compare_digest(query["state"][0].encode("utf-8"), expected_state.encode("utf-8")):
+    if not secrets.compare_digest(
+        query["state"][0].encode("utf-8"), expected_state.encode("utf-8")
+    ):
         raise RuntimeError("OAuth state validation failed. Restart setup and use the new callback.")
     return query["code"][0]
 
@@ -591,7 +595,9 @@ def ensure_token(
             _client_id, _client_secret, code, _redirect_uri, code_verifier
         )
     except (httpx.HTTPError, ValueError):
-        raise RuntimeError("OAuth token exchange failed. Restart setup and authorize again.") from None
+        raise RuntimeError(
+            "OAuth token exchange failed. Restart setup and authorize again."
+        ) from None
     store.update(token_data)
 
     print("\n✓ Authentication successful!")
@@ -601,7 +607,7 @@ def ensure_token(
     print("  You can now use the MCP server for this country.")
     print(
         "  To add another account in the same country, rerun with "
-        f"--account <ALIAS>. To add another country: --site-id <OTHER_SITE>\n"
+        "--account <ALIAS>. To add another country: --site-id <OTHER_SITE>\n"
     )
 
     return store
