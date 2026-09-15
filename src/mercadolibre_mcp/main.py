@@ -371,7 +371,6 @@ async def create_item(input: CreateItemInput) -> dict:
     try:
         site, account = _resolve(input)
         body = {
-            "title": input.title,
             "category_id": input.category_id,
             "price": input.price,
             "currency_id": input.currency_id,
@@ -380,6 +379,8 @@ async def create_item(input: CreateItemInput) -> dict:
             "buying_mode": "buy_it_now",
             "listing_type_id": input.listing_type_id or "free",
         }
+        if not input.family_name:
+            body["title"] = input.title
         if input.description:
             body["description"] = {"plain_text": input.description}
         if input.pictures_urls:
