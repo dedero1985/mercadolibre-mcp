@@ -127,6 +127,9 @@ class CreateItemInput(SiteParam):
     tags: list[str] | None = Field(
         default=None, description="Tags like 'instant_payment', 'pet_side_promotion'"
     )
+    attributes: list[dict[str, str]] | None = Field(
+        default=None, description="Item attributes, e.g. [{\"id\": \"BRAND\", \"value_name\": \"Ubiquiti\"}]"
+    )
 
 
 class UpdateItemInput(SiteParam):
@@ -365,6 +368,7 @@ async def create_item(input: CreateItemInput) -> dict:
             "currency_id": input.currency_id,
             "available_quantity": input.available_quantity,
             "condition": input.condition,
+            "buying_mode": "buy_it_now",
             "listing_type_id": input.listing_type_id or "free",
         }
         if input.description:
@@ -373,6 +377,8 @@ async def create_item(input: CreateItemInput) -> dict:
             body["pictures"] = [{"source": url} for url in input.pictures_urls]
         if input.tags:
             body["tags"] = input.tags
+        if input.attributes:
+            body["attributes"] = input.attributes
         data = get_client(site, account).post("items", json_body=body)
         return {
             "success": True,
