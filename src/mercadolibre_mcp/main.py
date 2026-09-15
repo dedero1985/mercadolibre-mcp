@@ -446,8 +446,9 @@ async def update_item(input: UpdateItemInput) -> dict:
         else:
             data = {"id": input.item_id}
         if input.description is not None:
-            client.post(
+            client.put(
                 f"items/{input.item_id}/description",
+                params={"api_version": "2"},
                 json_body={"plain_text": input.description},
             )
         return {"success": True, "item_id": data.get("id"), "status": data.get("status")}

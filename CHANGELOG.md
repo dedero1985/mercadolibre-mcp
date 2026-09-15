@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2] - 2026-09-14
+
+### Fixed
+
+- Replace existing item descriptions with MercadoLibre's required `PUT` API v2 request.
+- Add an offline regression test covering description updates.
+
 ## [0.3.1] - 2026-09-15
 
 ### Fixed

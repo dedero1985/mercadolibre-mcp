@@ -6,4 +6,4 @@ Full CRUD for listings, orders, shipping, ads, and more.
 
 from __future__ import annotations
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
