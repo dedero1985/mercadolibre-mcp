@@ -29,6 +29,7 @@ import os
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -128,7 +129,11 @@ class CreateItemInput(SiteParam):
         default=None, description="Tags like 'instant_payment', 'pet_side_promotion'"
     )
     attributes: list[dict[str, str]] | None = Field(
-        default=None, description="Item attributes, e.g. [{\"id\": \"BRAND\", \"value_name\": \"Ubiquiti\"}]"
+        default=None,
+        description=(
+            "Item attributes, e.g. [{\"id\": \"BRAND\", "
+            "\"value_name\": \"Ubiquiti\"}]"
+        ),
     )
     family_name: str | None = Field(default=None, description="Product family name")
 
@@ -315,7 +320,7 @@ async def search_items(input: SearchItemsInput) -> dict:
             "available_filters": data.get("available_filters", []),
         }
     except MercadoLibreError as e:
-        response = {"error": str(e)}
+        response: dict[str, Any] = {"error": str(e)}
         if isinstance(e.body, dict):
             safe_keys = {"error", "message", "code", "field", "references", "cause"}
             details = {key: e.body[key] for key in safe_keys if key in e.body}
@@ -399,7 +404,7 @@ async def create_item(input: CreateItemInput) -> dict:
             "permalink": data.get("permalink"),
         }
     except MercadoLibreError as e:
-        response = {"error": str(e)}
+        response: dict[str, Any] = {"error": str(e)}
         if isinstance(e.body, dict):
             safe_keys = {"error", "message", "code", "field", "references", "cause"}
             details = {key: e.body[key] for key in safe_keys if key in e.body}
@@ -484,7 +489,7 @@ async def list_my_items(input: ListMyItemsInput) -> dict:
         if not user_id:
             return {"error": f"Cannot determine user ID for site '{site}'. Re-run OAuth setup."}
 
-        params = {
+        params: dict[str, Any] = {
             "limit": min(input.limit, 200),
         }
         if input.status:
@@ -602,7 +607,7 @@ async def search_orders(input: SearchOrdersInput) -> dict:
         if not user_id:
             return {"error": f"Cannot determine user ID for site '{site}'. Re-run OAuth setup."}
 
-        params = {"seller": user_id, "limit": min(input.limit, 200)}
+        params: dict[str, Any] = {"seller": user_id, "limit": min(input.limit, 200)}
         if input.status:
             params["order.status"] = input.status
         if input.offset is not None:
@@ -776,7 +781,7 @@ async def list_ads_campaigns(input: ListCampaignsInput) -> dict:
         user_id = client.get_user_id()
         if not user_id:
             return {"error": f"Cannot determine user ID for site '{site}'. Re-run OAuth setup."}
-        params = {"seller_id": user_id, "limit": min(input.limit, 50)}
+        params: dict[str, Any] = {"seller_id": user_id, "limit": min(input.limit, 50)}
         if input.status:
             params["status"] = input.status
         data = client.get("advertising/campaigns", params=params)
@@ -913,7 +918,9 @@ mcp.tool(
 # Replace the flat tool list with a BM25 search so the LLM can discover
 # tools by searching keywords rather than enumerating all 20+.
 try:
-    from fastmcp.server.transforms.search import BM25Search
+    import importlib
+
+    BM25Search = getattr(importlib.import_module("fastmcp.server.transforms.search"), "BM25Search")
 
     mcp.add_transform(BM25Search(description="Search MercadoLibre tools by name or description"))
 except (ImportError, AttributeError):
