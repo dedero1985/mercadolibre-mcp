@@ -130,6 +130,7 @@ class CreateItemInput(SiteParam):
     attributes: list[dict[str, str]] | None = Field(
         default=None, description="Item attributes, e.g. [{\"id\": \"BRAND\", \"value_name\": \"Ubiquiti\"}]"
     )
+    family_name: str | None = Field(default=None, description="Product family name")
 
 
 class UpdateItemInput(SiteParam):
@@ -384,6 +385,8 @@ async def create_item(input: CreateItemInput) -> dict:
             body["tags"] = input.tags
         if input.attributes:
             body["attributes"] = input.attributes
+        if input.family_name:
+            body["family_name"] = input.family_name
         data = get_client(site, account).post("items", json_body=body)
         return {
             "success": True,
