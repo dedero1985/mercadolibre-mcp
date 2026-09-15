@@ -316,8 +316,11 @@ async def search_items(input: SearchItemsInput) -> dict:
         }
     except MercadoLibreError as e:
         response = {"error": str(e)}
-        if isinstance(e.body, dict) and e.body.get("cause"):
-            response["cause"] = e.body["cause"]
+        if isinstance(e.body, dict):
+            safe_keys = {"error", "message", "code", "field", "references", "cause"}
+            details = {key: e.body[key] for key in safe_keys if key in e.body}
+            if details:
+                response["details"] = details
         return response
     except RuntimeError as e:
         return {"error": str(e)}
@@ -396,8 +399,11 @@ async def create_item(input: CreateItemInput) -> dict:
         }
     except MercadoLibreError as e:
         response = {"error": str(e)}
-        if isinstance(e.body, dict) and e.body.get("cause"):
-            response["cause"] = e.body["cause"]
+        if isinstance(e.body, dict):
+            safe_keys = {"error", "message", "code", "field", "references", "cause"}
+            details = {key: e.body[key] for key in safe_keys if key in e.body}
+            if details:
+                response["details"] = details
         return response
     except RuntimeError as e:
         return {"error": str(e)}
