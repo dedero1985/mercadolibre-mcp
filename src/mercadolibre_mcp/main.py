@@ -429,15 +429,22 @@ async def update_item(input: UpdateItemInput) -> dict:
             body["price"] = input.price
         if input.available_quantity is not None:
             body["available_quantity"] = input.available_quantity
-        if input.description is not None:
-            body["description"] = {"plain_text": input.description}
         if input.pictures_urls is not None:
             body["pictures"] = [{"source": url} for url in input.pictures_urls]
 
-        if not body:
+        if not body and input.description is None:
             return {"error": "No fields to update provided"}
 
-        data = get_client(site, account).put(f"items/{input.item_id}", json_body=body)
+        client = get_client(site, account)
+        if body:
+            data = client.put(f"items/{input.item_id}", json_body=body)
+        else:
+            data = {"id": input.item_id}
+        if input.description is not None:
+            client.post(
+                f"items/{input.item_id}/description",
+                json_body={"plain_text": input.description},
+            )
         return {"success": True, "item_id": data.get("id"), "status": data.get("status")}
     except _CLIENT_ERRORS as e:
         return {"error": str(e)}
