@@ -313,7 +313,12 @@ async def search_items(input: SearchItemsInput) -> dict:
             "results": results,
             "available_filters": data.get("available_filters", []),
         }
-    except _CLIENT_ERRORS as e:
+    except MercadoLibreError as e:
+        response = {"error": str(e)}
+        if isinstance(e.body, dict) and e.body.get("cause"):
+            response["cause"] = e.body["cause"]
+        return response
+    except RuntimeError as e:
         return {"error": str(e)}
 
 
@@ -386,7 +391,12 @@ async def create_item(input: CreateItemInput) -> dict:
             "item_id": data.get("id"),
             "permalink": data.get("permalink"),
         }
-    except _CLIENT_ERRORS as e:
+    except MercadoLibreError as e:
+        response = {"error": str(e)}
+        if isinstance(e.body, dict) and e.body.get("cause"):
+            response["cause"] = e.body["cause"]
+        return response
+    except RuntimeError as e:
         return {"error": str(e)}
 
 
